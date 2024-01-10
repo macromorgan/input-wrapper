@@ -60,14 +60,16 @@ static struct dev_info input_devs[] = {
  *
  * Iterate over all of the event input devices to find the ones we
  * want to monitor and start adding them to the virtual_device struct.
- * FF devices are closed as read-only and reopened as read/write, since
- * we need to communicate bidirectionally with them.
+ * FF devices are closed as read-only and reopened as write-only, since
+ * we need to write to them but not necessarily read them. Return is
+ * total number of devices found.
  */
-void iterate_input_devices(struct virtual_device *v_dev)
+int iterate_input_devices(struct virtual_device *v_dev)
 {
 	char fd_dev[20];
 	char name[256];
 	int fd, ret;
+	int count = 0;
 	unsigned long evbit = 0;
 
 	for (int i = 0; i < 256; i++) {
@@ -79,14 +81,15 @@ void iterate_input_devices(struct virtual_device *v_dev)
 		ret = ioctl(fd, EVIOCGBIT(0, sizeof(evbit)), &evbit);
 		for (int i = 0; i < ARRAY_SIZE(input_devs); i++) {
 			if (!strcmp(name, input_devs[i].name) &&
-					 (evbit & (1 << EV_FF)))
-				v_dev->ff_fd = open(fd_dev, O_RDWR |
-							    O_NONBLOCK |
-							    O_DSYNC |
-							    O_RSYNC);
-		};
+					 (evbit & (1 << EV_FF))) {
+				v_dev->ff_fd = open(fd_dev, O_WRONLY);
+				count += 1;
+			}
+		}
 		close(fd);
 	}
+
+	return count;
 }
 
 /**
@@ -102,7 +105,8 @@ int create_uinput_device(struct virtual_device *v_dev)
 {
 	int ret = 0;
 
-	v_dev->uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK | O_DSYNC | O_RSYNC);
+	v_dev->uinput_fd = open("/dev/uinput", O_RDWR | O_NONBLOCK |
+					       O_DSYNC | O_RSYNC);
 	if (v_dev->uinput_fd == -1)
 		return -ENODEV;
 
@@ -149,7 +153,8 @@ int create_uinput_device(struct virtual_device *v_dev)
  * physical ff device and replay it back to the uinput device.
  * Return value is 0 for success, negative for error.
  */
-int handle_uinput_ff_upload(struct virtual_device *v_dev, struct input_event ev)
+int handle_uinput_ff_upload(struct virtual_device *v_dev,
+			    struct input_event ev)
 {
 	struct uinput_ff_upload ff_payload;
 	struct ff_effect effect;
@@ -187,7 +192,8 @@ int handle_uinput_ff_upload(struct virtual_device *v_dev, struct input_event ev)
  * physical ff device and replay it back to the uinput device.
  * Return value is 0 for success, negative for error.
  */
-int handle_uinput_ff_erase(struct virtual_device *v_dev, struct input_event ev)
+int handle_uinput_ff_erase(struct virtual_device *v_dev,
+			   struct input_event ev)
 {
 	struct uinput_ff_erase ff_payload;
 	int ret = 0;
@@ -210,33 +216,86 @@ int handle_uinput_ff_erase(struct virtual_device *v_dev, struct input_event ev)
 }
 
 /**
+ * set_ff_gain() - Set gain on physical ff hardware
+ * @v_dev: main virtual device struct
+ * @gain: value to set for gain
+ *
+ * Set the gain value of the physical ff hardware based on event
+ * received by uinput device. Return value is 0 for success,
+ * negative for error.
+ */
+int set_ff_gain(struct virtual_device *v_dev, __u16 gain)
+{
+	struct input_event ff_event = {
+		.type = EV_FF,
+		.code = FF_GAIN,
+		.value = gain,
+	};
+	int ret = 0;
+
+	ret = write(v_dev->ff_fd, (const void *) &ff_event,
+		    sizeof(ff_event));
+
+	if (ret != sizeof(ff_event)) {
+		printf("Could not set device gain\n");
+		return -EIO;
+	}
+
+	return 0;
+}
+
+/**
+ * set_ff_effect_status() - Set ff effect on physical ff hardware
+ * @v_dev: main virtual device struct
+ * @int: id of effect
+ * @status: status of effect - 1 or 0
+ *
+ * Set the effect status of the physical ff hardware based on event
+ * received by uinput device. Return value is 0 for success,
+ * negative for error.
+ */
+int set_ff_effect_status(struct virtual_device *v_dev, int effect,
+			 int status)
+{
+	struct input_event ff_event = {
+		.type = EV_FF,
+		.code = effect,
+		.value = status,
+	};
+	int ret = 0;
+
+	ret = write(v_dev->ff_fd, (const void *) &ff_event,
+		    sizeof(ff_event));
+	if (ret != sizeof(ff_event)) {
+		printf("Could not set effect status\n");
+		return -EIO;
+	}
+
+	return 0;
+}
+/**
  * handle_ff_events() - Respond to ff_events
  *
  * @v_dev: main virtual device struct
  * @ev: input_event initiating ff upload
  * @fd_in: file descriptor responsible for ff_event
  *
- * Replay an ff event to both the physical and virtual ff device.
- * Return value is 0 for success, negative for error.
+ * Dispatch an ff event to the correct ff handler. Return value is 0
+ * for success, negative for error.
  */
-int handle_ff_events(struct virtual_device *v_dev, struct input_event ev, int fd_in)
+int handle_ff_events(struct virtual_device *v_dev,
+		     struct input_event ev)
 {
-	struct input_event ff_event;
 	int ret = 0;
 
 	if (ev.type != EV_FF)
 		return 0;
 
-	memset(&ff_event, 0, sizeof(ff_event));
-	ff_event.type = ev.type;
-	ff_event.code = ev.code;
-	ff_event.value = ev.value;
-	ret += write(v_dev->uinput_fd, (const void *) &ff_event, sizeof(ff_event));
-	ret += write(v_dev->ff_fd, (const void *) &ff_event, sizeof(ff_event));
-	if (ret != sizeof(ff_event) * 2) {
-		printf("Unable to handle ff event: %d, %d\n", ret, sizeof(ff_event));
-		return ret;
-	}
+	if (ev.code == FF_GAIN)
+		return set_ff_gain(v_dev, ev.value);
+
+	if (ev.code <= FF_GAIN)
+		return set_ff_effect_status(v_dev, ev.code, ev.value);
 
 	return 0;
 }
@@ -264,12 +323,24 @@ void parse_ev_incoming(struct virtual_device *v_dev, int fd_in)
 			ev.value,
 			ev.time.tv_sec,
 			fd_in);
-		if ((ev.type == EV_UINPUT) && (ev.code == UI_FF_UPLOAD))
-			handle_uinput_ff_upload(v_dev, ev);
-		if ((ev.type == EV_UINPUT) && (ev.code == UI_FF_ERASE))
-			handle_uinput_ff_erase(v_dev, ev);
-		if (ev.type == EV_FF)
-			handle_ff_events(v_dev, ev, fd_in);
+		switch (ev.type) {
+		case EV_UINPUT:
+			if (ev.code == UI_FF_UPLOAD) {
+				handle_uinput_ff_upload(v_dev, ev);
+				break;
+			} else if (ev.code == UI_FF_ERASE) {
+				handle_uinput_ff_erase(v_dev, ev);
+				break;
+			}
+			printf("UINPUT ev %d not handled\n", ev.code);
+			break;
+		case EV_FF:
+			handle_ff_events(v_dev, ev);
+			break;
+		default:
+			printf("EV type %d EV code %d not handled\n", ev.type, ev.code);
+		}
+
 	} else {
 		printf("read failed descriptor %d, errno %d\n", fd_in, errno);
 	}
@@ -289,7 +360,11 @@ int main(void)
 		return -ENOMEM;
 	};
 
-	iterate_input_devices(v_dev);
+	ret = iterate_input_devices(v_dev);
+	if (ret == 0) {
+		printf("No input devices found to capture\n");
+		return -ENODEV;
+	}
 
 	ret = create_uinput_device(v_dev);
 	if (ret) {
@@ -303,7 +378,7 @@ int main(void)
 		return -1;
 	}
 
-	uevent.events = EPOLLIN | EPOLLET;
+	uevent.events = EPOLLIN;
 	uevent.data.fd = v_dev->uinput_fd;
 	ret = epoll_ctl(ep_fd, EPOLL_CTL_ADD, v_dev->uinput_fd, &uevent);
 	if (ret == -1) {
@@ -311,18 +386,10 @@ int main(void)
 		return -1;
 	}
 
-	fevent.events = EPOLLIN | EPOLLET;
-	fevent.data.fd = v_dev->ff_fd;
-	ret = epoll_ctl(ep_fd, EPOLL_CTL_ADD, v_dev->ff_fd, &fevent);
-	if (ret == -1) {
-		printf("Cannot monitor ff device.\n");
-		return -1;
-	}
-
 	while (1) {
 		int n, i;
 
-		n = epoll_wait(ep_fd, event_queue, MAX_EVENTS, -1);
+		n = epoll_wait(ep_fd, event_queue, 1, -1);
 		for (i = 0; i < n; i++) {
 			if (event_queue[i].events & EPOLLIN)
 				parse_ev_incoming(v_dev, event_queue[i].data.fd);
