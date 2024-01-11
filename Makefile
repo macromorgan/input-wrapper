@@ -1,9 +1,13 @@
-.SILENT: all clean
+.SILENT: all install clean
 C=gcc
-CFLAGS=-c -Wall -Os
+CFLAGS=-Wall -Os -fpie
 
 all: wrap.c
-	$(C) wrap.c -o wrap
+	$(C) $(CFLAGS) wrap.c -o wrap
+
+install:
+	strip --strip-unneeded wrap
+	cp wrap /sbin/wrap
 
 clean:
 	rm -f wrap
