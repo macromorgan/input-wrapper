@@ -155,7 +155,7 @@ int iterate_input_devices(struct virtual_device *v_dev)
 {
 	char fd_dev[20];
 	char name[256];
-	int fd, ret;
+	int fd;
 	int count = 0;
 	int key_devs = 0;
 	unsigned long evbit = 0;
@@ -165,8 +165,8 @@ int iterate_input_devices(struct virtual_device *v_dev)
 		fd = open(fd_dev, O_RDONLY);
 		if (fd == -1)
 			continue;
-		ret = ioctl(fd, EVIOCGNAME(256), name);
-		ret = ioctl(fd, EVIOCGBIT(0, sizeof(evbit)), &evbit);
+		ioctl(fd, EVIOCGNAME(256), name);
+		ioctl(fd, EVIOCGBIT(0, sizeof(evbit)), &evbit);
 		for (int i = 0; i < ARRAY_SIZE(input_devs); i++) {
 			if (!strcmp(name, input_devs[i].name)) {
 				if (evbit & (1 << EV_FF)) {
@@ -261,7 +261,7 @@ int create_uinput_device(struct virtual_device *v_dev)
 	v_dev->usetup.id.bustype = BUS_HOST;
 	v_dev->usetup.id.vendor = DEVICE_VID;
 	v_dev->usetup.id.product = DEVICE_PID;
-	strncpy(v_dev->usetup.name, DEVICE_NAME, sizeof(DEVICE_NAME));
+	sprintf(v_dev->usetup.name, DEVICE_NAME);
 
 	ret = ioctl(v_dev->uinput_fd, UI_DEV_SETUP, &v_dev->usetup);
 	if (ret)
@@ -443,7 +443,7 @@ int handle_ff_events(struct virtual_device *v_dev,
 void parse_ev_incoming(struct virtual_device *v_dev, int fd_in)
 {
 	struct input_event ev;
-	int len;
+	int len, ret;
 
 	len = read(fd_in, &ev, sizeof(ev));
 	if (len != -1) {
@@ -451,9 +451,12 @@ void parse_ev_incoming(struct virtual_device *v_dev, int fd_in)
 		case EV_SYN:
 		case EV_ABS:
 		case EV_KEY:
-			if (v_dev->uinput_fd != fd_in)
-				write(v_dev->uinput_fd,
+			if (v_dev->uinput_fd != fd_in) {
+				ret = write(v_dev->uinput_fd,
 				      &ev, sizeof(ev));
+				if (ret < 0)
+					printf("Event dropped\n");
+			}
 			break;
 		case EV_UINPUT:
 			if (ev.code == UI_FF_UPLOAD) {
@@ -541,7 +544,7 @@ int main(void)
 	int ep_fd;
 	int ret = 0;
 
-	v_dev = malloc(sizeof(v_dev));
+	v_dev = malloc(sizeof(struct virtual_device));
 
 	if (v_dev == NULL) {
 		printf("Unable to allocate memory for virtual dev.\n");
@@ -579,7 +582,7 @@ int main(void)
 				parse_ev_incoming(v_dev,
 						  event_queue[i].data.fd);
 			else {
-				printf("epoll error, type %lu\n",
+				printf("epoll error, type %u\n",
 				       event_queue[i].events);
 				close(event_queue[i].data.fd);
 				continue;
