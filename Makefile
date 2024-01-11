@@ -7,7 +7,7 @@ all: virtual_controller.c
 
 install:
 	strip --strip-unneeded virtual_controller
-	cp wrap /sbin/virtual_controller
+	cp virtual_controller /sbin/virtual_controller
 
 clean:
 	rm -f virtual_controller
