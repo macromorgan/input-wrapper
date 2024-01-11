@@ -2,12 +2,12 @@
 C=gcc
 CFLAGS=-Wall -Os -fpie
 
-all: wrap.c
-	$(C) $(CFLAGS) wrap.c -o wrap
+all: virtual_controller.c
+	$(C) $(CFLAGS) virtual_controller.c -o virtual_controller
 
 install:
-	strip --strip-unneeded wrap
-	cp wrap /sbin/wrap
+	strip --strip-unneeded virtual_controller
+	cp wrap /sbin/virtual_controller
 
 clean:
-	rm -f wrap
+	rm -f virtual_controller
