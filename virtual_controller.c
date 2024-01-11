@@ -545,11 +545,12 @@ int main(void)
 	int ret = 0;
 
 	v_dev = malloc(sizeof(struct virtual_device));
-
 	if (v_dev == NULL) {
 		printf("Unable to allocate memory for virtual dev.\n");
 		return -ENOMEM;
 	};
+
+	memset(v_dev, 0, sizeof(struct virtual_device));
 
 	ret = iterate_input_devices(v_dev);
 	if (ret == 0) {
@@ -570,8 +571,10 @@ int main(void)
 	}
 
 	ret = define_epoll_fds(v_dev, ep_fd);
-	if (ret)
+	if (ret) {
+		printf("Cannot monitor input devices: %d\n", ret);
 		return ret;
+	}
 
 	while (1) {
 		int n, i;
