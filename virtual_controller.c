@@ -53,11 +53,13 @@ struct dev_info {
  * driver.
  */
 static struct dev_info input_devs[] = {
-	{ .name = "pwm-vibrator" },
 	{ .name = "adc-joystick" },
+	{ .name = "adc-keys" },
+	{ .name = "gpio-keys" },
 	{ .name = "gpio-keys-control" },
 	{ .name = "gpio-keys-vol" },
-	{ .name = "adc-keys" },
+	{ .name = "gpio-vibrator" },
+	{ .name = "pwm-vibrator" },
 };
 
 /**
