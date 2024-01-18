@@ -22,8 +22,7 @@
 
 #define MAX_EVENTS		64
 
-/* Value comes from kernel define FF_MEMLESS_EFFECTS which is 16 */
-#define MAX_FF_EFFECTS		16
+/* Maximum number of key devices we support currently (arbitrary). */
 #define MAX_KEY_DEVS		8
 
 #define ARRAY_SIZE(array)	(sizeof(array) / sizeof(*array))
@@ -102,6 +101,43 @@ int enumerate_abs_device(struct virtual_device *v_dev)
 				       i);
 		}
 	}
+
+	return 0;
+}
+
+/**
+ * enumerate_ff_device() - Identify supported force feedback features
+ * @v_dev: pointer to virtual_device struct
+ *
+ * Enumerate force feedback features and add them to the uinput virtual
+ * device. Return 0 on success.
+ */
+int enumerate_ff_device(struct virtual_device *v_dev)
+{
+	uint8_t ff_b[FF_MAX/8 + 1];
+	int ret = 0;
+
+	if (v_dev->ff_fd <= 0)
+		return 0;
+
+	ret = ioctl(v_dev->ff_fd,
+		    EVIOCGBIT(EV_FF, sizeof(ff_b)), ff_b);
+	if (ret < 0) {
+		printf("Unable to enumerate FF device: %d\n", ret);
+		return -ENODEV;
+	}
+
+	for (int i = 0; i < FF_MAX; i++) {
+		if (TEST_BIT(i, ff_b))
+			ioctl(v_dev->uinput_fd, UI_SET_FFBIT, i);
+	}
+
+	ret = ioctl(v_dev->ff_fd, EVIOCGEFFECTS, &v_dev->usetup.ff_effects_max);
+	if (ret < 0) {
+		printf("Unable to determine max FF effects\n");
+		return -EIO;
+	};
+
 	return 0;
 }
 
@@ -139,6 +175,23 @@ int enumerate_key_devices(struct virtual_device *v_dev)
 }
 
 /**
+ * input_device_match() - Check input device name against table
+ * @name: pointer to device name to check
+ *
+ * Check if the device name is one that we want to monitor. Return
+ * 1 if there is a match and 0 if there is not.
+ */
+int input_device_match(char *name)
+{
+	for (int i = 0; i < ARRAY_SIZE(input_devs); i++) {
+		if (!strcmp(name, input_devs[i].name))
+			return 1;
+	}
+
+	return 0;
+}
+
+/**
  * iterate_input_devices() - Identify input devices to be monitored
  * @v_dev: pointer to virtual_device struct
  *
@@ -148,14 +201,12 @@ int enumerate_key_devices(struct virtual_device *v_dev)
  * we need to write to them but not necessarily read them. Return is
  * total number of devices found.
  *
- * TODO: Cleanup how we open and add file descriptors to the main
- * struct.
  */
 int iterate_input_devices(struct virtual_device *v_dev)
 {
 	char fd_dev[20];
 	char name[256];
-	int fd;
+	int fd, ret;
 	int count = 0;
 	int key_devs = 0;
 	unsigned long evbit = 0;
@@ -165,39 +216,39 @@ int iterate_input_devices(struct virtual_device *v_dev)
 		fd = open(fd_dev, O_RDONLY);
 		if (fd == -1)
 			continue;
+
 		ioctl(fd, EVIOCGNAME(256), name);
 		ioctl(fd, EVIOCGBIT(0, sizeof(evbit)), &evbit);
-		for (int i = 0; i < ARRAY_SIZE(input_devs); i++) {
-			if (!strcmp(name, input_devs[i].name)) {
-				if (evbit & (1 << EV_FF)) {
-					v_dev->ff_fd = open(fd_dev,
-							    O_WRONLY);
-					printf("Found EV_FF: %s\n",
-					       fd_dev);
-					count += 1;
-				}
-				if (evbit & (1 << EV_ABS)) {
-					v_dev->abs_fd = open(fd_dev,
-							     O_RDONLY |
-							     O_NONBLOCK);
-					printf("Found EV_ABS: %s\n",
-					       fd_dev);
-					count += 1;
-				}
-				if (evbit & (1 << EV_KEY)) {
-					if (key_devs >= MAX_KEY_DEVS)
-						continue;
-					v_dev->key_fd[key_devs] = open(fd_dev,
-								       O_RDONLY |
-								       O_NONBLOCK);
-					printf("Found EV_KEY: %s\n",
-					       fd_dev);
-					count += 1;
-					key_devs += 1;
-				}
-			}
-		}
 		close(fd);
+
+		ret = input_device_match(name);
+		if (!ret)
+			continue;
+
+		if (evbit & (1 << EV_FF)) {
+			v_dev->ff_fd = open(fd_dev, O_WRONLY);
+			printf("Found EV_FF: %s\n", fd_dev);
+			count += 1;
+		}
+
+		if (evbit & (1 << EV_ABS)) {
+			v_dev->abs_fd = open(fd_dev, O_RDONLY |
+					     O_NONBLOCK);
+			printf("Found EV_ABS: %s\n", fd_dev);
+			count += 1;
+		}
+
+		if (evbit & (1 << EV_KEY)) {
+			if (key_devs >= MAX_KEY_DEVS)
+				continue;
+
+			v_dev->key_fd[key_devs] = open(fd_dev,
+						       O_RDONLY |
+						       O_NONBLOCK);
+			printf("Found EV_KEY: %s\n", fd_dev);
+			count += 1;
+			key_devs += 1;
+		}
 	}
 
 	return count;
@@ -212,7 +263,6 @@ int iterate_input_devices(struct virtual_device *v_dev)
  * more capable of dealing with. Return 0 on success, negative on
  * error.
  *
- * TODO: enumerate force feedback capabilites instead of hard-coding.
  */
 int create_uinput_device(struct virtual_device *v_dev)
 {
@@ -248,14 +298,9 @@ int create_uinput_device(struct virtual_device *v_dev)
 		if (ret)
 			return ret;
 
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_RUMBLE);
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_GAIN);
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_PERIODIC);
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_SINE);
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_TRIANGLE);
-		ioctl(v_dev->uinput_fd, UI_SET_FFBIT, FF_SQUARE);
-
-		v_dev->usetup.ff_effects_max = MAX_FF_EFFECTS;
+		ret = enumerate_ff_device(v_dev);
+		if (ret)
+			return ret;
 	}
 
 	v_dev->usetup.id.bustype = BUS_HOST;

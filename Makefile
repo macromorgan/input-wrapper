@@ -1,6 +1,6 @@
 .SILENT: all install clean
 C=gcc
-CFLAGS=-Wall -Os -fpie
+CFLAGS=-Wall -Os -fpie -std=gnu11
 
 all: virtual_controller.c
 	$(C) $(CFLAGS) virtual_controller.c -o virtual_controller
