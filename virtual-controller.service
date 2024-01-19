@@ -1,0 +1,13 @@
+[Unit]
+Description=Input mapper for virtual controller
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+ExecStart=/usr/sbin/virtual_controller
+Nice=-20
+OOMScoreAdjust=-1000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
