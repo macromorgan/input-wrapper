@@ -185,7 +185,7 @@ int enumerate_key_devices(struct virtual_device *v_dev)
  */
 int input_device_match(char *name)
 {
-	for (int i = 0; i < ARRAY_SIZE(input_devs); i++) {
+	for (int i = 0; i < (int)ARRAY_SIZE(input_devs); i++) {
 		if (!strcmp(name, input_devs[i].name))
 			return 1;
 	}
