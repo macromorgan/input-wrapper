@@ -22,8 +22,8 @@
 
 #define MAX_EVENTS		64
 
-/* Maximum number of key devices we support currently (arbitrary). */
-#define MAX_KEY_DEVS		8
+/* Maximum number of devices of each type we support (arbitrary). */
+#define MAX_DEVS		8
 
 #define ARRAY_SIZE(array)	(sizeof(array) / sizeof(*array))
 #define	TEST_BIT(bit, array)	(array[bit / 8] & (1 << (bit % 8)))
@@ -31,15 +31,15 @@
 /*
  * The struct that contains the necessary data to manage the virtual
  * input device. We currently support a single force feedback device,
- * a single abs device, and multiple key devices.
+ * multiple abs devices, and multiple key devices.
  */
 struct virtual_device {
 	struct uinput_setup usetup;
 	struct uinput_abs_setup uabssetup[ABS_MAX];
 	int uinput_fd;
 	int ff_fd;
-	int abs_fd;
-	int key_fd[MAX_KEY_DEVS];
+	int abs_fd[MAX_DEVS];
+	int key_fd[MAX_DEVS];
 };
 
 struct dev_info {
@@ -48,63 +48,71 @@ struct dev_info {
 
 /*
  * List of all the "devices of interest" that we're looking to
- * capture. Only the last ff device, last abs device, and first
- * 10 key devices that match the names below will be used by the
- * driver.
+ * capture. Only the first 8 key and abs devices and last ff device
+ * that match the names below will be used by the driver.
  */
 static struct dev_info input_devs[] = {
 	{ .name = "adc-joystick" },
 	{ .name = "adc-keys" },
+	{ .name = "adc-trigger" },
 	{ .name = "gpio-keys" },
 	{ .name = "gpio-keys-control" },
 	{ .name = "gpio-keys-vol" },
 	{ .name = "gpio-vibrator" },
+	{ .name = "gpio-vibrator-l" },
+	{ .name = "gpio-vibrator-r" },
 	{ .name = "pwm-vibrator" },
+	{ .name = "pwm-vibrator-l" },
+	{ .name = "pwm-vibrator-r" },
 };
 
 /**
- * enumerate_abs_device() - Identify ABS axes and features
+ * enumerate_abs_devices() - Identify ABS axes and features
  * @v_dev: pointer to virtual_device struct
  *
  * Enumerate ABS axes and add them to the uinput virtual device.
- * Return 0 on success or negative on error.
+ * Return number of devices found on success or negative on error.
  */
-int enumerate_abs_device(struct virtual_device *v_dev)
+int enumerate_abs_devices(struct virtual_device *v_dev)
 {
 	uint8_t abs_b[ABS_MAX/8 + 1];
+	int dev_count = 0;
 	int ret = 0;
 
-	if (v_dev->abs_fd <= 0)
+	if (v_dev->abs_fd[0] <= 0)
 		return 0;
 
-	ret = ioctl(v_dev->abs_fd,
-		    EVIOCGBIT(EV_ABS, sizeof(abs_b)), abs_b);
-	if (ret < 0) {
-		printf("Unable to enumerate ABS device: %d\n", ret);
-		return -ENODEV;
+	for (int dev_num = 0; dev_num < MAX_DEVS; dev_num++) {
+		if (v_dev->abs_fd[dev_num] > 0)
+			dev_count += 1;
 	}
 
-	for (int i = 0; i < ABS_MAX; i++) {
-		if (TEST_BIT(i, abs_b)) {
-			ret = ioctl(v_dev->abs_fd, EVIOCGABS(i),
-				    &v_dev->uabssetup[i].absinfo);
-			if (ret)
-				continue;
+	for (int k = 0; k < dev_count; k++) {
+		ioctl(v_dev->abs_fd[k],
+		      EVIOCGBIT(EV_ABS, sizeof(abs_b)), abs_b);
 
-			ret = ioctl(v_dev->uinput_fd,
-				    UI_SET_ABSBIT, i);
-			if (ret)
-				continue;
-			v_dev->uabssetup[i].code = i;
-			ret = ioctl(v_dev->uinput_fd, UI_ABS_SETUP,
-				    &v_dev->uabssetup[i]);
-			if (ret)
-				printf("Unable to set abs axis %d\n",
-				       i);
+		for (int i = 0; i < ABS_MAX; i++) {
+			if (TEST_BIT(i, abs_b)) {
+				ret = ioctl(v_dev->abs_fd[k], EVIOCGABS(i),
+					    &v_dev->uabssetup[i].absinfo);
+				if (ret)
+					continue;
+
+				ret = ioctl(v_dev->uinput_fd,
+					    UI_SET_ABSBIT, i);
+				if (ret)
+					continue;
+				v_dev->uabssetup[i].code = i;
+				ret = ioctl(v_dev->uinput_fd, UI_ABS_SETUP,
+					    &v_dev->uabssetup[i]);
+				if (ret)
+					printf("Unable to set abs axis %d\n",
+					       i);
+			}
 		}
 	}
 
-	return 0;
+	return dev_count;
 }
 
 /**
@@ -156,7 +164,7 @@ int enumerate_key_devices(struct virtual_device *v_dev)
 	int dev_count = 0;
 	int keys = 0;
 
-	for (int dev_num = 0; dev_num < MAX_KEY_DEVS; dev_num++) {
+	for (int dev_num = 0; dev_num < MAX_DEVS; dev_num++) {
 		if (v_dev->key_fd[dev_num] > 0)
 			dev_count += 1;
 	}
@@ -211,6 +219,7 @@ int iterate_input_devices(struct virtual_device *v_dev)
 	int fd, ret;
 	int count = 0;
 	int key_devs = 0;
+	int abs_devs = 0;
 	unsigned long evbit = 0;
 
 	for (int i = 0; i < 256; i++) {
@@ -234,14 +243,19 @@ int iterate_input_devices(struct virtual_device *v_dev)
 		}
 
 		if (evbit & (1 << EV_ABS)) {
-			v_dev->abs_fd = open(fd_dev, O_RDONLY |
-					     O_NONBLOCK);
+			if (abs_devs >= MAX_DEVS)
+				continue;
+
+			v_dev->abs_fd[abs_devs] = open(fd_dev,
+						       O_RDONLY |
+						       O_NONBLOCK);
 			printf("Found EV_ABS: %s\n", fd_dev);
 			count += 1;
+			abs_devs += 1;
 		}
 
 		if (evbit & (1 << EV_KEY)) {
-			if (key_devs >= MAX_KEY_DEVS)
+			if (key_devs >= MAX_DEVS)
 				continue;
 
 			v_dev->key_fd[key_devs] = open(fd_dev,
@@ -275,13 +289,15 @@ int create_uinput_device(struct virtual_device *v_dev)
 	if (v_dev->uinput_fd == -1)
 		return -ENODEV;
 
-	if (v_dev->abs_fd > 0) {
+	if (v_dev->abs_fd[0] > 0) {
 		ret = ioctl(v_dev->uinput_fd, UI_SET_EVBIT, EV_ABS);
 		if (ret)
 			return ret;
-		ret = enumerate_abs_device(v_dev);
-		if (ret)
-			return ret;
+		ret = enumerate_abs_devices(v_dev);
+		if (!(ret > 0)) {
+			printf("No ABS devices found\n");
+			return -ENODEV;
+		}
 	}
 
 	if (v_dev->key_fd[0] > 0) {
@@ -557,18 +573,20 @@ int define_epoll_fds(struct virtual_device *v_dev, int ep_fd)
 		return -1;
 	}
 
-	if (v_dev->abs_fd > 0) {
+	for (int i = 0; i < MAX_DEVS; i++) {
+		if (!(v_dev->abs_fd[i] > 0))
+			continue;
 		event.events = EPOLLIN;
-		event.data.fd = v_dev->abs_fd;
-		ret = epoll_ctl(ep_fd, EPOLL_CTL_ADD, v_dev->abs_fd,
+		event.data.fd = v_dev->abs_fd[i];
+		ret = epoll_ctl(ep_fd, EPOLL_CTL_ADD, v_dev->abs_fd[i],
 				&event);
 		if (ret == -1) {
-			printf("Cannot monitor abs device\n");
+			printf("Cannot monitor abs device %d\n", i);
 			return -1;
 		}
 	}
 
-	for (int i = 0; i < MAX_KEY_DEVS; i++) {
+	for (int i = 0; i < MAX_DEVS; i++) {
 		if (!(v_dev->key_fd[i] > 0))
 			continue;
 		event.events = EPOLLIN;
@@ -626,7 +644,7 @@ int main(void)
 	while (1) {
 		int n, i;
 
-		n = epoll_wait(ep_fd, event_queue, 1, -1);
+		n = epoll_wait(ep_fd, event_queue, (MAX_DEVS * 3), -1);
 		for (i = 0; i < n; i++) {
 			if (event_queue[i].events & EPOLLIN)
 				parse_ev_incoming(v_dev,
