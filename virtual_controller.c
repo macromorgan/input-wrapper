@@ -102,6 +102,7 @@ int enumerate_abs_devices(struct virtual_device *v_dev)
 					    UI_SET_ABSBIT, i);
 				if (ret)
 					continue;
+				v_dev->usetup.id.version |= i;
 				v_dev->uabssetup[i].code = i;
 				ret = ioctl(v_dev->uinput_fd, UI_ABS_SETUP,
 					    &v_dev->uabssetup[i]);
@@ -138,8 +139,10 @@ int enumerate_ff_device(struct virtual_device *v_dev)
 	}
 
 	for (int i = 0; i < FF_MAX; i++) {
-		if (TEST_BIT(i, ff_b))
+		if (TEST_BIT(i, ff_b)) {
 			ioctl(v_dev->uinput_fd, UI_SET_FFBIT, i);
+			v_dev->usetup.id.version |= i;
+		}
 	}
 
 	ret = ioctl(v_dev->ff_fd, EVIOCGEFFECTS, &v_dev->usetup.ff_effects_max);
@@ -176,6 +179,7 @@ int enumerate_key_devices(struct virtual_device *v_dev)
 			if (TEST_BIT(i, key_b)) {
 				ioctl(v_dev->uinput_fd,
 				      UI_SET_KEYBIT, i);
+				v_dev->usetup.id.version |= i;
 				keys += 1;
 			}
 		}
