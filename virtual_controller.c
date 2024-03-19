@@ -78,6 +78,7 @@ int enumerate_abs_devices(struct virtual_device *v_dev)
 	uint8_t abs_b[ABS_MAX/8 + 1];
 	int dev_count = 0;
 	int ret = 0;
+	uint8_t abs_index = 0;
 
 	if (v_dev->abs_fd[0] <= 0)
 		return 0;
@@ -102,7 +103,7 @@ int enumerate_abs_devices(struct virtual_device *v_dev)
 					    UI_SET_ABSBIT, i);
 				if (ret)
 					continue;
-				v_dev->usetup.id.version |= i;
+				abs_index |= i;
 				v_dev->uabssetup[i].code = i;
 				ret = ioctl(v_dev->uinput_fd, UI_ABS_SETUP,
 					    &v_dev->uabssetup[i]);
@@ -113,6 +114,7 @@ int enumerate_abs_devices(struct virtual_device *v_dev)
 		}
 	}
 
+	v_dev->usetup.id.version |= abs_index;
 	return dev_count;
 }
 
@@ -127,6 +129,7 @@ int enumerate_ff_device(struct virtual_device *v_dev)
 {
 	uint8_t ff_b[FF_MAX/8 + 1];
 	int ret = 0;
+	uint8_t ff_index = 0;
 
 	if (v_dev->ff_fd <= 0)
 		return 0;
@@ -141,7 +144,7 @@ int enumerate_ff_device(struct virtual_device *v_dev)
 	for (int i = 0; i < FF_MAX; i++) {
 		if (TEST_BIT(i, ff_b)) {
 			ioctl(v_dev->uinput_fd, UI_SET_FFBIT, i);
-			v_dev->usetup.id.version |= i;
+			ff_index |= i;
 		}
 	}
 
@@ -151,6 +154,7 @@ int enumerate_ff_device(struct virtual_device *v_dev)
 		return -EIO;
 	};
 
+	v_dev->usetup.id.version ^= ff_index;
 	return 0;
 }
 
@@ -166,6 +170,7 @@ int enumerate_key_devices(struct virtual_device *v_dev)
 	uint8_t key_b[KEY_MAX/8 + 1];
 	int dev_count = 0;
 	int keys = 0;
+	uint16_t key_index = 0;
 
 	for (int dev_num = 0; dev_num < MAX_DEVS; dev_num++) {
 		if (v_dev->key_fd[dev_num] > 0)
@@ -179,12 +184,13 @@ int enumerate_key_devices(struct virtual_device *v_dev)
 			if (TEST_BIT(i, key_b)) {
 				ioctl(v_dev->uinput_fd,
 				      UI_SET_KEYBIT, i);
-				v_dev->usetup.id.version |= i;
+				key_index |= (i << 6);
 				keys += 1;
 			}
 		}
 	}
 
+	v_dev->usetup.id.version ^= key_index;
 	return keys;
 }
 
